@@ -1,0 +1,218 @@
+// API tests for the libzstd bindings.
+//
+// Every test below calls into the C library, so the suite needs
+// libzstd installed and linked.  `novo pkg build` type-checks the
+// declarations without it; `novo test` runs them and does not.
+//
+// Every test compresses and decompresses in memory, so the suite reads
+// and writes nothing.
+
+use std.test
+use libzstd
+
+// `ZSTD_c_compressionLevel`.
+const C_LEVEL: Int = 100
+
+// `ZSTD_c_checksumFlag`.
+const C_CHECKSUM: Int = 201
+
+// `ZSTD_d_windowLogMax`.
+const D_WINDOW_LOG_MAX: Int = 100
+
+// `ZSTD_reset_session_and_parameters`.
+const RESET_ALL: Int = 3
+
+// `ZSTD_e_end`, the directive that closes a frame.
+const E_END: Int = 2
+
+// The message every round trip below uses, and its length in bytes.
+const MESSAGE: Str = "the quick brown fox jumps over the lazy dog, again and again"
+const MESSAGE_LEN: Int = 60
+
+@test
+fn test_the_library_reports_its_version_and_its_levels() [io, ffi]
+    test.case("ZSTD_versionNumber, ZSTD_versionString and the three levels")
+    test.assert(libzstd.zstd_version_number() >= 10400)
+    test.assert(str.len(ptr.read_str(libzstd.zstd_version_string())) > 0)
+    // The smallest level is negative, and it is a C `int`.
+    let min_level = libzstd.zstd_min_clevel() as i32
+    test.assert(min_level < 0)
+    test.assert(libzstd.zstd_max_clevel() == 22)
+    test.assert(libzstd.zstd_default_clevel() == 3)
+
+@test
+fn test_an_error_is_recognised_and_named() [io, ffi]
+    test.case("ZSTD_isError, ZSTD_getErrorName")
+    // A destination of one byte cannot hold any frame.
+    let dst = ptr.alloc(1)
+    let src = ptr.alloc(64)
+    ptr.write_bytes_buf(src, bytes.from_str(MESSAGE))
+    let rc = libzstd.zstd_compress(dst, 1, src, MESSAGE_LEN, 3)
+    test.assert(libzstd.zstd_is_error(rc) == 1)
+    test.assert(str.len(ptr.read_str(libzstd.zstd_get_error_name(rc))) > 0)
+    // A size is not an error, and the reference has a name for that too.
+    test.assert(libzstd.zstd_is_error(64) == 0)
+    test.assert(ptr.read_str(libzstd.zstd_get_error_name(64)) == "No error detected")
+    ptr.free(src)
+    ptr.free(dst)
+
+@test
+fn test_a_message_round_trips_through_the_one_shot_calls() [io, ffi]
+    test.case("ZSTD_compressBound, ZSTD_compress, ZSTD_decompress")
+    let src = ptr.alloc(64)
+    ptr.write_bytes_buf(src, bytes.from_str(MESSAGE))
+    let bound = libzstd.zstd_compress_bound(MESSAGE_LEN)
+    test.assert(bound > MESSAGE_LEN)
+    let frame = ptr.alloc(bound)
+    let n = libzstd.zstd_compress(frame, bound, src, MESSAGE_LEN, 3)
+    test.assert(libzstd.zstd_is_error(n) == 0)
+    // Sixty bytes is shorter than the frame header plus a block, so the
+    // frame is not smaller than the message; it is a frame all the same.
+    test.assert(n > 0)
+    test.assert(n <= bound)
+    let back = ptr.alloc(128)
+    let got = libzstd.zstd_decompress(back, 128, frame, n)
+    test.assert(got == MESSAGE_LEN)
+    test.assert(bytes.to_str(ptr.read_bytes_n(back, MESSAGE_LEN)) == MESSAGE)
+    ptr.free(back)
+    ptr.free(frame)
+    ptr.free(src)
+
+@test
+fn test_a_frame_reports_its_own_sizes() [io, ffi]
+    test.case("ZSTD_getFrameContentSize, ZSTD_findFrameCompressedSize, ZSTD_isSkippableFrame")
+    let src = ptr.alloc(64)
+    ptr.write_bytes_buf(src, bytes.from_str(MESSAGE))
+    let frame = ptr.alloc(256)
+    let n = libzstd.zstd_compress(frame, 256, src, MESSAGE_LEN, 3)
+    test.assert(libzstd.zstd_get_frame_content_size(frame, n) == MESSAGE_LEN)
+    test.assert(libzstd.zstd_find_frame_compressed_size(frame, n) == n)
+    test.assert(libzstd.zstd_is_skippable_frame(frame, n) == 0)
+    // -2 is ZSTD_CONTENTSIZE_ERROR: these bytes are not a frame.
+    test.assert(libzstd.zstd_get_frame_content_size(src, MESSAGE_LEN) == -2)
+    ptr.free(frame)
+    ptr.free(src)
+
+@test
+fn test_a_compression_context_is_created_configured_and_reused() [io, ffi]
+    test.case("ZSTD_createCCtx, ZSTD_compressCCtx, ZSTD_compress2 and the settings")
+    let cctx = libzstd.zstd_create_cctx()
+    test.assert(cctx != 0)
+    let src = ptr.alloc(64)
+    ptr.write_bytes_buf(src, bytes.from_str(MESSAGE))
+    let frame = ptr.alloc(256)
+    // The level argument wins over the context's own parameters here.
+    let a = libzstd.zstd_compress_cctx(cctx, frame, 256, src, MESSAGE_LEN, 1)
+    test.assert(libzstd.zstd_is_error(a) == 0)
+    test.assert(libzstd.zstd_cctx_reset(cctx, RESET_ALL) == 0)
+    // Setting a parameter answers the value that was actually set.
+    test.assert(libzstd.zstd_cctx_set_parameter(cctx, C_LEVEL, 9) == 9)
+    test.assert(libzstd.zstd_cctx_set_parameter(cctx, C_CHECKSUM, 1) == 1)
+    test.assert(libzstd.zstd_cctx_set_pledged_src_size(cctx, MESSAGE_LEN) == 0)
+    let b = libzstd.zstd_compress2(cctx, frame, 256, src, MESSAGE_LEN)
+    test.assert(libzstd.zstd_is_error(b) == 0)
+    // The checksum adds four bytes, so the two frames differ in length.
+    test.assert(b != a)
+    test.assert(libzstd.zstd_sizeof_cctx(cctx) > 0)
+    // Parameter 9999 is not a parameter.
+    test.assert(libzstd.zstd_is_error(libzstd.zstd_cctx_set_parameter(cctx, 9999, 0)) == 1)
+    test.assert(libzstd.zstd_free_cctx(cctx) == 0)
+    ptr.free(frame)
+    ptr.free(src)
+
+@test
+fn test_a_decompression_context_is_created_configured_and_reused() [io, ffi]
+    test.case("ZSTD_createDCtx, ZSTD_decompressDCtx and the settings")
+    let src = ptr.alloc(64)
+    ptr.write_bytes_buf(src, bytes.from_str(MESSAGE))
+    let frame = ptr.alloc(256)
+    let n = libzstd.zstd_compress(frame, 256, src, MESSAGE_LEN, 3)
+    let dctx = libzstd.zstd_create_dctx()
+    test.assert(dctx != 0)
+    // The decompression setter answers 0, where the compression one
+    // answers the value it set.
+    test.assert(libzstd.zstd_dctx_set_parameter(dctx, D_WINDOW_LOG_MAX, 27) == 0)
+    let back = ptr.alloc(128)
+    test.assert(libzstd.zstd_decompress_dctx(dctx, back, 128, frame, n) == MESSAGE_LEN)
+    test.assert(bytes.to_str(ptr.read_bytes_n(back, MESSAGE_LEN)) == MESSAGE)
+    test.assert(libzstd.zstd_dctx_reset(dctx, RESET_ALL) == 0)
+    test.assert(libzstd.zstd_sizeof_dctx(dctx) > 0)
+    test.assert(libzstd.zstd_free_dctx(dctx) == 0)
+    ptr.free(back)
+    ptr.free(frame)
+    ptr.free(src)
+
+@test
+fn test_the_streaming_interface_round_trips_a_message() [io, ffi]
+    test.case("ZSTD_compressStream2, ZSTD_decompressStream and the four sizes")
+    test.assert(libzstd.zstd_cstream_in_size() > 0)
+    test.assert(libzstd.zstd_cstream_out_size() > 0)
+    test.assert(libzstd.zstd_dstream_in_size() > 0)
+    test.assert(libzstd.zstd_dstream_out_size() > 0)
+    let src = ptr.alloc(64)
+    ptr.write_bytes_buf(src, bytes.from_str(MESSAGE))
+    let frame = ptr.alloc(256)
+    // A buffer description is three eight-byte words: the address, the
+    // size and the position.
+    let in_buf = ptr.alloc(24)
+    let out_buf = ptr.alloc(24)
+    ptr.write_word(in_buf, src)
+    ptr.write_word(in_buf + 8, MESSAGE_LEN)
+    ptr.write_word(in_buf + 16, 0)
+    ptr.write_word(out_buf, frame)
+    ptr.write_word(out_buf + 8, 256)
+    ptr.write_word(out_buf + 16, 0)
+    let cctx = libzstd.zstd_create_cctx()
+    // The directive 2 closes the frame, and a 0 says it is closed.
+    test.assert(libzstd.zstd_compress_stream2(cctx, out_buf, in_buf, E_END) == 0)
+    let n = ptr.read_word(out_buf + 16)
+    test.assert(n > 0)
+    let _ = libzstd.zstd_free_cctx(cctx)
+
+    let back = ptr.alloc(128)
+    ptr.write_word(in_buf, frame)
+    ptr.write_word(in_buf + 8, n)
+    ptr.write_word(in_buf + 16, 0)
+    ptr.write_word(out_buf, back)
+    ptr.write_word(out_buf + 8, 128)
+    ptr.write_word(out_buf + 16, 0)
+    let dctx = libzstd.zstd_create_dctx()
+    // A 0 from the decompressor says a frame has just been completed.
+    test.assert(libzstd.zstd_decompress_stream(dctx, out_buf, in_buf) == 0)
+    test.assert(ptr.read_word(out_buf + 16) == MESSAGE_LEN)
+    test.assert(bytes.to_str(ptr.read_bytes_n(back, MESSAGE_LEN)) == MESSAGE)
+    let _ = libzstd.zstd_free_dctx(dctx)
+    ptr.free(back)
+    ptr.free(out_buf)
+    ptr.free(in_buf)
+    ptr.free(frame)
+    ptr.free(src)
+
+@test
+fn test_a_dictionary_loads_into_both_contexts() [io, ffi]
+    test.case("ZSTD_CCtx_loadDictionary, ZSTD_DCtx_loadDictionary and the identifiers")
+    // A raw content dictionary: any bytes at all, with no header, so
+    // it carries no identifier of its own.
+    let dict = ptr.alloc(64)
+    ptr.write_bytes_buf(dict, bytes.from_str("the quick brown fox jumps over the lazy dog"))
+    test.assert(libzstd.zstd_get_dict_id_from_dict(dict, 43) == 0)
+    let src = ptr.alloc(64)
+    ptr.write_bytes_buf(src, bytes.from_str(MESSAGE))
+    let frame = ptr.alloc(256)
+    let cctx = libzstd.zstd_create_cctx()
+    test.assert(libzstd.zstd_cctx_load_dictionary(cctx, dict, 43) == 0)
+    let n = libzstd.zstd_compress2(cctx, frame, 256, src, MESSAGE_LEN)
+    test.assert(libzstd.zstd_is_error(n) == 0)
+    // A raw content dictionary writes no identifier into the frame.
+    test.assert(libzstd.zstd_get_dict_id_from_frame(frame, n) == 0)
+    let dctx = libzstd.zstd_create_dctx()
+    test.assert(libzstd.zstd_dctx_load_dictionary(dctx, dict, 43) == 0)
+    let back = ptr.alloc(128)
+    test.assert(libzstd.zstd_decompress_dctx(dctx, back, 128, frame, n) == MESSAGE_LEN)
+    test.assert(bytes.to_str(ptr.read_bytes_n(back, MESSAGE_LEN)) == MESSAGE)
+    let _ = libzstd.zstd_free_dctx(dctx)
+    let _ = libzstd.zstd_free_cctx(cctx)
+    ptr.free(back)
+    ptr.free(frame)
+    ptr.free(src)
+    ptr.free(dict)

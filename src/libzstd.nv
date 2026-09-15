@@ -1,0 +1,287 @@
+// The C entry points of libzstd, one novo-lang declaration each.
+//
+// A pointer is an `Int`: the C API hands out opaque handles for the
+// compression context and the decompression context, and this module
+// carries each of them as the address the C library returned.  Zero is
+// the null pointer.
+//
+// A buffer is an address and a length, never a novo-lang value.  The
+// caller reserves the bytes with `ptr.alloc`, writes them with
+// `ptr.write_bytes_buf` and reads them back with `ptr.read_bytes_n`.
+//
+// Most entry points answer a `size_t`, and libzstd carries its errors
+// in that same value: an error is a code subtracted from zero, so it
+// arrives as a small negative number.  `ZSTD_isError` is the only
+// correct test, and `ZSTD_getErrorName` turns the value into text.
+//
+// `ZSTD_cParam_getBounds` and `ZSTD_dParam_getBounds` return a
+// `ZSTD_bounds` structure by value and are not here.  The README's
+// "What is not included" section lists them.
+
+// Compress `src_size` bytes at `src` into the buffer at `dst`.
+//
+// `dst_capacity` is the size of the destination buffer, and
+// `ZSTD_compressBound` gives a size that always suffices.  `level` is
+// a compression level between `ZSTD_minCLevel` and `ZSTD_maxCLevel`,
+// and 0 selects the default.  Answers the number of bytes written, or
+// an error `ZSTD_isError` recognises.
+pub @ffi(library = "zstd", symbol = "ZSTD_compress")
+fn zstd_compress(dst: Int, dst_capacity: Int, src: Int, src_size: Int, level: Int) -> Int [ffi]
+
+// Decompress one complete frame of `src_size` bytes at `src`.
+//
+// `dst_capacity` must be at least the frame's decompressed size, which
+// `ZSTD_getFrameContentSize` reports when the frame records it.
+// Answers the number of bytes written, or an error.
+pub @ffi(library = "zstd", symbol = "ZSTD_decompress")
+fn zstd_decompress(dst: Int, dst_capacity: Int, src: Int, src_size: Int) -> Int [ffi]
+
+// Get the largest compressed size `src_size` bytes can produce.
+//
+// A buffer of this size never overflows, whatever the input and
+// whatever the level.  For an input that does not compress, the frame
+// is slightly larger than the input.
+pub @ffi(library = "zstd", symbol = "ZSTD_compressBound")
+fn zstd_compress_bound(src_size: Int) -> Int [ffi]
+
+// Read the decompressed size recorded in a frame header.
+//
+// `src` must point at the start of a frame and `src_size` must be at
+// least `ZSTD_FRAMEHEADERSIZE_MAX` (18) bytes, or the whole frame.
+// Answers -1 when the frame does not record a size, which is what a
+// stream written without a pledged size does, and -2 when the bytes
+// are not a frame header.  Neither is a value to allocate with.
+pub @ffi(library = "zstd", symbol = "ZSTD_getFrameContentSize")
+fn zstd_get_frame_content_size(src: Int, src_size: Int) -> Int [ffi]
+
+// Get the compressed size of the first frame at `src`.
+//
+// This is how a caller walks a buffer holding several frames: add the
+// answer to the address and read the next one.  Answers an error when
+// the bytes are not a frame.
+pub @ffi(library = "zstd", symbol = "ZSTD_findFrameCompressedSize")
+fn zstd_find_frame_compressed_size(src: Int, src_size: Int) -> Int [ffi]
+
+// Ask whether a frame at `src` is a skippable frame.
+//
+// Answers 1 when it is.  A skippable frame carries application data
+// that a decompressor steps over, and `ZSTD_decompress` refuses it.
+pub @ffi(library = "zstd", symbol = "ZSTD_isSkippableFrame")
+fn zstd_is_skippable_frame(src: Int, src_size: Int) -> Int [ffi]
+
+// Create a compression context.
+//
+// The context holds the working memory and the parameters, and reusing
+// one across calls avoids reallocating both.  Answers 0 when the
+// allocation failed.
+pub @ffi(library = "zstd", symbol = "ZSTD_createCCtx")
+fn zstd_create_cctx() -> Int [ffi]
+
+// Release a compression context.
+//
+// Releasing the null address is allowed and answers 0.
+pub @ffi(library = "zstd", symbol = "ZSTD_freeCCtx")
+fn zstd_free_cctx(cctx: Int) -> Int [ffi]
+
+// Compress with a context, at a level, ignoring the context's own
+// parameters.
+//
+// The arguments after the context are those of `ZSTD_compress`.  The
+// context supplies the working memory and nothing else.
+pub @ffi(library = "zstd", symbol = "ZSTD_compressCCtx")
+fn zstd_compress_cctx(cctx: Int, dst: Int, dst_capacity: Int, src: Int, src_size: Int,
+                      level: Int) -> Int [ffi]
+
+// Compress with a context, using the parameters set on it.
+//
+// The arguments are those of `ZSTD_compress` without the level, which
+// comes from `ZSTD_CCtx_setParameter` instead.  This is the one-shot
+// form of the advanced interface.
+pub @ffi(library = "zstd", symbol = "ZSTD_compress2")
+fn zstd_compress2(cctx: Int, dst: Int, dst_capacity: Int, src: Int, src_size: Int) -> Int [ffi]
+
+// Set one parameter on a compression context.
+//
+// `param` is a parameter number: 100 is the compression level, 101 the
+// window log, 201 the checksum flag and 400 the worker count.  `value`
+// is its setting, and 0 restores the default.  Answers the value that
+// was actually set, which for some parameters is the requested one
+// clamped into its bounds, and an error when the number is unknown.
+pub @ffi(library = "zstd", symbol = "ZSTD_CCtx_setParameter")
+fn zstd_cctx_set_parameter(cctx: Int, param: Int, value: Int) -> Int [ffi]
+
+// Tell a compression context how many bytes the frame will hold.
+//
+// The size is written into the frame header, so a decompressor can
+// allocate once. It must be exact: the compression fails if fewer or
+// more bytes arrive. Pass -1 for unknown, which is the default.
+pub @ffi(library = "zstd", symbol = "ZSTD_CCtx_setPledgedSrcSize")
+fn zstd_cctx_set_pledged_src_size(cctx: Int, pledged_src_size: Int) -> Int [ffi]
+
+// Reset a compression context.
+//
+// `reset` is 1 to end the frame in progress and keep the parameters, 2
+// to restore the parameters and leave a frame in progress alone, and 3
+// for both.  A 2 fails while a frame is in progress.
+pub @ffi(library = "zstd", symbol = "ZSTD_CCtx_reset")
+fn zstd_cctx_reset(cctx: Int, reset: Int) -> Int [ffi]
+
+// Get the memory a compression context is currently using, in bytes.
+//
+// The figure grows with the window size the parameters ask for, and it
+// is why a context is created once and reused.
+pub @ffi(library = "zstd", symbol = "ZSTD_sizeof_CCtx")
+fn zstd_sizeof_cctx(cctx: Int) -> Int [ffi]
+
+// Load a dictionary into a compression context, by copying it.
+//
+// `dict` and `dict_size` are the dictionary, and 0 for `dict` clears
+// the one already loaded.  Every frame the context produces afterwards
+// uses it, and a decompressor needs the same dictionary to read them.
+pub @ffi(library = "zstd", symbol = "ZSTD_CCtx_loadDictionary")
+fn zstd_cctx_load_dictionary(cctx: Int, dict: Int, dict_size: Int) -> Int [ffi]
+
+// Create a decompression context.
+//
+// Answers 0 when the allocation failed.
+pub @ffi(library = "zstd", symbol = "ZSTD_createDCtx")
+fn zstd_create_dctx() -> Int [ffi]
+
+// Release a decompression context.
+//
+// Releasing the null address is allowed and answers 0.
+pub @ffi(library = "zstd", symbol = "ZSTD_freeDCtx")
+fn zstd_free_dctx(dctx: Int) -> Int [ffi]
+
+// Decompress one frame with a context.
+//
+// The arguments after the context are those of `ZSTD_decompress`.
+pub @ffi(library = "zstd", symbol = "ZSTD_decompressDCtx")
+fn zstd_decompress_dctx(dctx: Int, dst: Int, dst_capacity: Int, src: Int,
+                        src_size: Int) -> Int [ffi]
+
+// Set one parameter on a decompression context.
+//
+// `param` 100 is `ZSTD_d_windowLogMax`, the largest window the context
+// will accept.  A frame asking for more is refused, which is how a
+// decompressor bounds the memory an untrusted frame can make it use.
+// Answers 0 on success, unlike `ZSTD_CCtx_setParameter`, which answers
+// the value it set.
+pub @ffi(library = "zstd", symbol = "ZSTD_DCtx_setParameter")
+fn zstd_dctx_set_parameter(dctx: Int, param: Int, value: Int) -> Int [ffi]
+
+// Reset a decompression context.
+//
+// `reset` takes the same three values as `ZSTD_CCtx_reset`.
+pub @ffi(library = "zstd", symbol = "ZSTD_DCtx_reset")
+fn zstd_dctx_reset(dctx: Int, reset: Int) -> Int [ffi]
+
+// Get the memory a decompression context is currently using, in bytes.
+pub @ffi(library = "zstd", symbol = "ZSTD_sizeof_DCtx")
+fn zstd_sizeof_dctx(dctx: Int) -> Int [ffi]
+
+// Load a dictionary into a decompression context, by copying it.
+//
+// `dict` and `dict_size` are the dictionary, and 0 for `dict` clears
+// the one already loaded.  It must be the dictionary the frames were
+// compressed with.
+pub @ffi(library = "zstd", symbol = "ZSTD_DCtx_loadDictionary")
+fn zstd_dctx_load_dictionary(dctx: Int, dict: Int, dict_size: Int) -> Int [ffi]
+
+// Compress a stream, one piece of input at a time.
+//
+// `output` and `input` are the addresses of two 24-byte structures the
+// caller lays out: an address, a size and a position, in that order and
+// each eight bytes wide.  `end_op` is 0 to keep collecting, 1 to flush
+// what has been given, and 2 to flush and close the frame.  Answers 0
+// when everything asked for is done, and otherwise a hint at how many
+// bytes the next call would like — which is not an error.
+pub @ffi(library = "zstd", symbol = "ZSTD_compressStream2")
+fn zstd_compress_stream2(cctx: Int, output: Int, input: Int, end_op: Int) -> Int [ffi]
+
+// Decompress a stream, one piece of input at a time.
+//
+// `output` and `input` are laid out as they are for
+// `ZSTD_compressStream2`.  Answers 0 when a frame has just been
+// completed, and otherwise a hint at how many bytes the next call
+// would like.  A caller stops at a 0 and not at an empty input: a
+// frame can end with bytes still to come.
+pub @ffi(library = "zstd", symbol = "ZSTD_decompressStream")
+fn zstd_decompress_stream(dctx: Int, output: Int, input: Int) -> Int [ffi]
+
+// Get the input buffer size a streaming compressor prefers.
+//
+// Reading in pieces of this size costs the fewest calls.
+pub @ffi(library = "zstd", symbol = "ZSTD_CStreamInSize")
+fn zstd_cstream_in_size() -> Int [ffi]
+
+// Get the output buffer size a streaming compressor prefers.
+//
+// A buffer of this size is large enough for one whole block, so a
+// flush never has to be split across calls.
+pub @ffi(library = "zstd", symbol = "ZSTD_CStreamOutSize")
+fn zstd_cstream_out_size() -> Int [ffi]
+
+// Get the input buffer size a streaming decompressor prefers.
+pub @ffi(library = "zstd", symbol = "ZSTD_DStreamInSize")
+fn zstd_dstream_in_size() -> Int [ffi]
+
+// Get the output buffer size a streaming decompressor prefers.
+pub @ffi(library = "zstd", symbol = "ZSTD_DStreamOutSize")
+fn zstd_dstream_out_size() -> Int [ffi]
+
+// Get the identifier recorded in a dictionary.
+//
+// Answers 0 when the bytes are not a zstd dictionary, or are a raw
+// content dictionary, which carries no identifier.
+pub @ffi(library = "zstd", symbol = "ZSTD_getDictID_fromDict")
+fn zstd_get_dict_id_from_dict(dict: Int, dict_size: Int) -> Int [ffi]
+
+// Get the dictionary identifier recorded in a frame.
+//
+// Answers 0 when the frame used no dictionary, or used one whose
+// identifier was not written into the frame.
+pub @ffi(library = "zstd", symbol = "ZSTD_getDictID_fromFrame")
+fn zstd_get_dict_id_from_frame(src: Int, src_size: Int) -> Int [ffi]
+
+// Ask whether a returned value is an error.
+//
+// Answers 1 when it is.  This is the only correct test: an error is a
+// code subtracted from zero, and a size and an error are the same C
+// type.
+pub @ffi(library = "zstd", symbol = "ZSTD_isError")
+fn zstd_is_error(code: Int) -> Int [ffi]
+
+// Get the text for an error.
+//
+// The answer is the address of a static string the library owns.  A
+// value that is not an error answers `"No error detected"`.
+pub @ffi(library = "zstd", symbol = "ZSTD_getErrorName")
+fn zstd_get_error_name(code: Int) -> Int [ffi]
+
+// Get the smallest compression level the library accepts.
+//
+// The level is negative: the negative levels trade ratio for speed.
+pub @ffi(library = "zstd", symbol = "ZSTD_minCLevel")
+fn zstd_min_clevel() -> Int [ffi]
+
+// Get the largest compression level the library accepts.
+pub @ffi(library = "zstd", symbol = "ZSTD_maxCLevel")
+fn zstd_max_clevel() -> Int [ffi]
+
+// Get the level used when 0 is asked for.
+pub @ffi(library = "zstd", symbol = "ZSTD_defaultCLevel")
+fn zstd_default_clevel() -> Int [ffi]
+
+// Get the version of the library as a number.
+//
+// The value is the major version times a hundred thousand, plus the
+// minor times a hundred, plus the release: 1.5.5 answers 10505.
+pub @ffi(library = "zstd", symbol = "ZSTD_versionNumber")
+fn zstd_version_number() -> Int [ffi]
+
+// Get the version of the library as text.
+//
+// The answer is the address of a static string such as `"1.5.5"`.
+pub @ffi(library = "zstd", symbol = "ZSTD_versionString")
+fn zstd_version_string() -> Int [ffi]
