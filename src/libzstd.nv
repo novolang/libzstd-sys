@@ -1,6 +1,6 @@
 // The C entry points of libzstd, one novo-lang declaration each.
 //
-// A pointer is an `Int`: the C API hands out opaque handles for the
+// A pointer is an `Int`.  The C API hands out opaque handles for the
 // compression context and the decompression context, and this module
 // carries each of them as the address the C library returned.  Zero is
 // the null pointer.
@@ -10,84 +10,142 @@
 // `ptr.write_bytes_buf` and reads them back with `ptr.read_bytes_n`.
 //
 // Most entry points answer a `size_t`, and libzstd carries its errors
-// in that same value: an error is a code subtracted from zero, so it
-// arrives as a small negative number.  `ZSTD_isError` is the only
-// correct test, and `ZSTD_getErrorName` turns the value into text.
+// in that same value.  An error is a code subtracted from zero, so it
+// arrives as a small negative number.  `ZSTD_isError` is the test for
+// it, and `ZSTD_getErrorName` turns the value into text.
 //
 // `ZSTD_cParam_getBounds` and `ZSTD_dParam_getBounds` return a
-// `ZSTD_bounds` structure by value and are not here.  The README's
-// "What is not included" section lists them.
-
-// Compress `src_size` bytes at `src` into the buffer at `dst`.
+// `ZSTD_bounds` structure by value and are not declared here.  The
+// README's "What is not included" section lists them.
 //
-// `dst_capacity` is the size of the destination buffer, and
-// `ZSTD_compressBound` gives a size that always suffices.  `level` is
-// a compression level between `ZSTD_minCLevel` and `ZSTD_maxCLevel`,
-// and 0 selects the default.  Answers the number of bytes written, or
-// an error `ZSTD_isError` recognises.
+// The examples in these comments are fenced `novo ignore`, so `novo
+// doc` does not compile them.  A compiled example links against
+// libzstd, and the link fails where that library is not installed.
+
+// Compress `src_size` bytes at `src` into one frame in the buffer at
+// `dst`.
+//
+// `dst_capacity` is the size of the destination buffer.  A capacity of
+// at least `ZSTD_compressBound(src_size)` guarantees there is room for
+// the frame.  `level` is a compression level between `ZSTD_minCLevel`
+// and `ZSTD_maxCLevel`, and 0 selects the default.  Answers the number
+// of bytes written, or an error `ZSTD_isError` recognises.
+//
+// ```novo ignore
+// let n = libzstd.zstd_compress(frame, bound, src, 43, 3)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_compress")
 fn zstd_compress(dst: Int, dst_capacity: Int, src: Int, src_size: Int, level: Int) -> Int [ffi]
 
-// Decompress one complete frame of `src_size` bytes at `src`.
+// Decompress the frames of `src_size` bytes at `src` into the buffer at
+// `dst`.
 //
-// `dst_capacity` must be at least the frame's decompressed size, which
-// `ZSTD_getFrameContentSize` reports when the frame records it.
-// Answers the number of bytes written, or an error.
+// `src_size` must be the exact size of one or more whole frames.
+// Compressed frames are decompressed one after another, and skippable
+// frames are stepped over.  `dst_capacity` is an upper bound on the
+// decompressed size, which `ZSTD_getFrameContentSize` reports when a
+// frame records it.  Answers the number of bytes written, or an error.
+//
+// ```novo ignore
+// let got = libzstd.zstd_decompress(back, size, frame, n)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_decompress")
 fn zstd_decompress(dst: Int, dst_capacity: Int, src: Int, src_size: Int) -> Int [ffi]
 
-// Get the largest compressed size `src_size` bytes can produce.
+// Get the largest compressed size `src_size` bytes can produce in one
+// pass.
 //
-// A buffer of this size never overflows, whatever the input and
-// whatever the level.  For an input that does not compress, the frame
-// is slightly larger than the input.
+// A destination of this size removes one cause of failure, a buffer
+// too small for the frame.  For an input that does not compress, the
+// frame is slightly larger than the input.  An input larger than
+// `ZSTD_MAX_INPUT_SIZE` answers an error instead of a size.
+//
+// ```novo ignore
+// let bound = libzstd.zstd_compress_bound(43)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_compressBound")
 fn zstd_compress_bound(src_size: Int) -> Int [ffi]
 
 // Read the decompressed size recorded in a frame header.
 //
-// `src` must point at the start of a frame and `src_size` must be at
-// least `ZSTD_FRAMEHEADERSIZE_MAX` (18) bytes, or the whole frame.
-// Answers -1 when the frame does not record a size, which is what a
-// stream written without a pledged size does, and -2 when the bytes
-// are not a frame header.  Neither is a value to allocate with.
+// `src` points at the start of a frame, and `src_size` is at least the
+// size of its header.  Any size of `ZSTD_FRAMEHEADERSIZE_MAX` (18)
+// bytes or more is enough.  Answers the size when the frame records
+// it, and 0 for a valid empty frame.  Answers -1,
+// `ZSTD_CONTENTSIZE_UNKNOWN`, when the frame does not record a size,
+// which is usual for a frame written by the streaming calls.  Answers
+// -2, `ZSTD_CONTENTSIZE_ERROR`, when the bytes are not a frame header
+// or are too few.  A size from an untrusted frame can be wrong, so a
+// caller checks it against its own limit before allocating.
+//
+// ```novo ignore
+// let size = libzstd.zstd_get_frame_content_size(frame, n)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_getFrameContentSize")
 fn zstd_get_frame_content_size(src: Int, src_size: Int) -> Int [ffi]
 
 // Get the compressed size of the first frame at `src`.
 //
-// This is how a caller walks a buffer holding several frames: add the
-// answer to the address and read the next one.  Answers an error when
-// the bytes are not a frame.
+// `src` points at the start of a frame or a skippable frame, and
+// `src_size` is at least that frame's size.  The answer is suitable to
+// pass as `src_size` to `ZSTD_decompress`.  Adding it to the address
+// finds the next frame in a buffer that holds several.  Answers an
+// error when the bytes are not a frame.
+//
+// ```novo ignore
+// let first = libzstd.zstd_find_frame_compressed_size(buf, len)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_findFrameCompressedSize")
 fn zstd_find_frame_compressed_size(src: Int, src_size: Int) -> Int [ffi]
 
-// Ask whether a frame at `src` is a skippable frame.
+// Ask whether the bytes at `src` begin with the identifier of a
+// skippable frame.
 //
-// Answers 1 when it is.  A skippable frame carries application data
-// that a decompressor steps over, and `ZSTD_decompress` refuses it.
+// Answers 1 when they do and 0 otherwise.  A skippable frame carries
+// application data, and a decompressor steps over it.  zstd.h declares
+// this function in its experimental section, and libzstd exports it
+// from the shared library all the same.
+//
+// ```novo ignore
+// let skippable = libzstd.zstd_is_skippable_frame(frame, n) == 1
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_isSkippableFrame")
 fn zstd_is_skippable_frame(src: Int, src_size: Int) -> Int [ffi]
 
 // Create a compression context.
 //
-// The context holds the working memory and the parameters, and reusing
-// one across calls avoids reallocating both.  Answers 0 when the
-// allocation failed.
+// A context holds the working memory and the parameters.  A program
+// that compresses many times creates one context and reuses it, and
+// uses one context per thread.  Reuse changes the speed and the memory
+// use, not the compression ratio.  Answers 0 when the allocation
+// failed.
+//
+// ```novo ignore
+// let cctx = libzstd.zstd_create_cctx()
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_createCCtx")
 fn zstd_create_cctx() -> Int [ffi]
 
 // Release a compression context.
 //
-// Releasing the null address is allowed and answers 0.
+// The null address is accepted and nothing is released.  Answers 0.
+//
+// ```novo ignore
+// let _ = libzstd.zstd_free_cctx(cctx)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_freeCCtx")
 fn zstd_free_cctx(cctx: Int) -> Int [ffi]
 
-// Compress with a context, at a level, ignoring the context's own
-// parameters.
+// Compress with a context at a level, as `ZSTD_compress` does.
 //
 // The arguments after the context are those of `ZSTD_compress`.  The
-// context supplies the working memory and nothing else.
+// call compresses at the level given and ignores every other
+// parameter.  Any parameter set on the context with
+// `ZSTD_CCtx_setParameter` is reset, and only the level remains.
+//
+// ```novo ignore
+// let n = libzstd.zstd_compress_cctx(cctx, frame, bound, src, 43, 3)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_compressCCtx")
 fn zstd_compress_cctx(cctx: Int, dst: Int, dst_capacity: Int, src: Int, src_size: Int,
                       level: Int) -> Int [ffi]
@@ -95,193 +153,360 @@ fn zstd_compress_cctx(cctx: Int, dst: Int, dst_capacity: Int, src: Int, src_size
 // Compress with a context, using the parameters set on it.
 //
 // The arguments are those of `ZSTD_compress` without the level, which
-// comes from `ZSTD_CCtx_setParameter` instead.  This is the one-shot
-// form of the advanced interface.
+// comes from `ZSTD_CCtx_setParameter` instead.  The call always starts
+// a new frame, and a frame left unfinished in the context is
+// forgotten.  It returns when the compression is complete.  Answers
+// the number of bytes written, or an error.
+//
+// ```novo ignore
+// let n = libzstd.zstd_compress2(cctx, frame, bound, src, 43)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_compress2")
 fn zstd_compress2(cctx: Int, dst: Int, dst_capacity: Int, src: Int, src_size: Int) -> Int [ffi]
 
 // Set one parameter on a compression context.
 //
-// `param` is a parameter number: 100 is the compression level, 101 the
-// window log, 201 the checksum flag and 400 the worker count.  `value`
-// is its setting, and 0 restores the default.  Answers the value that
-// was actually set, which for some parameters is the requested one
-// clamped into its bounds, and an error when the number is unknown.
+// `param` is a parameter number.  100 is the compression level, 101
+// the window log, 201 the checksum flag and 400 the worker count.
+// `value` is its setting, and 0 selects the default for each of these
+// four.  A value outside a parameter's bounds is clamped or refused,
+// depending on the parameter.  A parameter is set before a frame
+// starts, and a context with a dictionary loaded refuses a change.
+// A worker count of 1 or more is an error when libzstd was built
+// without multithreading.
+//
+// zstd.h says only that the call answers an error or not.  libzstd 1.5
+// answers the value it set on success, and an error for an unknown
+// parameter number.
+//
+// ```novo ignore
+// // 201 is ZSTD_c_checksumFlag.
+// let rc = libzstd.zstd_cctx_set_parameter(cctx, 201, 1)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_CCtx_setParameter")
 fn zstd_cctx_set_parameter(cctx: Int, param: Int, value: Int) -> Int [ffi]
 
-// Tell a compression context how many bytes the frame will hold.
+// Tell a compression context how many bytes the next frame will hold.
 //
 // The size is written into the frame header, so a decompressor can
-// allocate once. It must be exact: the compression fails if fewer or
-// more bytes arrive. Pass -1 for unknown, which is the default.
+// allocate once.  It must be exact, and the frame ends in an error if
+// fewer or more bytes arrive.  0 means an empty frame.  -1,
+// `ZSTD_CONTENTSIZE_UNKNOWN`, means an unknown size and is the
+// default.  The size applies to the next frame only.  When the whole
+// input is given in one call, as with `ZSTD_compress2`, the library
+// uses the input's size instead.  Answers 0 or an error.
+//
+// ```novo ignore
+// let rc = libzstd.zstd_cctx_set_pledged_src_size(cctx, 43)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_CCtx_setPledgedSrcSize")
 fn zstd_cctx_set_pledged_src_size(cctx: Int, pledged_src_size: Int) -> Int [ffi]
 
 // Reset a compression context.
 //
-// `reset` is 1 to end the frame in progress and keep the parameters, 2
-// to restore the parameters and leave a frame in progress alone, and 3
-// for both.  A 2 fails while a frame is in progress.
+// `reset` is one of three directives.  1, `ZSTD_reset_session_only`,
+// abandons the frame in progress and cancels any data not yet flushed.
+// The parameters and the dictionary stay.  2, `ZSTD_reset_parameters`,
+// restores every parameter to its default and drops the dictionary.
+// It fails while a frame is in progress.  3 does both.  Answers 0 or
+// an error, and resetting the session alone never fails.
+//
+// ```novo ignore
+// let rc = libzstd.zstd_cctx_reset(cctx, 3)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_CCtx_reset")
 fn zstd_cctx_reset(cctx: Int, reset: Int) -> Int [ffi]
 
-// Get the memory a compression context is currently using, in bytes.
+// Get the memory a compression context is using now, in bytes.
 //
-// The figure grows with the window size the parameters ask for, and it
-// is why a context is created once and reused.
+// The figure can grow or shrink over the context's life.  It grows
+// with the window size the parameters ask for.
+//
+// ```novo ignore
+// let bytes_used = libzstd.zstd_sizeof_cctx(cctx)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_sizeof_CCtx")
 fn zstd_sizeof_cctx(cctx: Int) -> Int [ffi]
 
 // Load a dictionary into a compression context, by copying it.
 //
-// `dict` and `dict_size` are the dictionary, and 0 for `dict` clears
-// the one already loaded.  Every frame the context produces afterwards
-// uses it, and a decompressor needs the same dictionary to read them.
+// `dict` and `dict_size` are the dictionary, and the caller may free
+// the bytes once the call returns.  A null or empty dictionary clears
+// the one already loaded.  The dictionary is used for every frame the
+// context produces until it is cleared, replaced, or dropped by a
+// parameter reset.  A decompressor needs the same dictionary to read
+// those frames.  The compression parameters cannot change after a
+// dictionary is loaded.  Answers 0 or an error.
+//
+// ```novo ignore
+// let rc = libzstd.zstd_cctx_load_dictionary(cctx, dict, dict_size)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_CCtx_loadDictionary")
 fn zstd_cctx_load_dictionary(cctx: Int, dict: Int, dict_size: Int) -> Int [ffi]
 
 // Create a decompression context.
 //
-// Answers 0 when the allocation failed.
+// A program that decompresses many times creates one context and
+// reuses it, and uses one context per thread.  Answers 0 when the
+// allocation failed.
+//
+// ```novo ignore
+// let dctx = libzstd.zstd_create_dctx()
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_createDCtx")
 fn zstd_create_dctx() -> Int [ffi]
 
 // Release a decompression context.
 //
-// Releasing the null address is allowed and answers 0.
+// The null address is accepted and nothing is released.  Answers 0.
+//
+// ```novo ignore
+// let _ = libzstd.zstd_free_dctx(dctx)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_freeDCtx")
 fn zstd_free_dctx(dctx: Int) -> Int [ffi]
 
-// Decompress one frame with a context.
+// Decompress with a context, as `ZSTD_decompress` does.
 //
-// The arguments after the context are those of `ZSTD_decompress`.
+// The arguments after the context are those of `ZSTD_decompress`.  The
+// dictionary and the parameters set on the context apply.
+//
+// ```novo ignore
+// let got = libzstd.zstd_decompress_dctx(dctx, back, size, frame, n)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_decompressDCtx")
 fn zstd_decompress_dctx(dctx: Int, dst: Int, dst_capacity: Int, src: Int,
                         src_size: Int) -> Int [ffi]
 
 // Set one parameter on a decompression context.
 //
-// `param` 100 is `ZSTD_d_windowLogMax`, the largest window the context
-// will accept.  A frame asking for more is refused, which is how a
-// decompressor bounds the memory an untrusted frame can make it use.
-// Answers 0 on success, unlike `ZSTD_CCtx_setParameter`, which answers
-// the value it set.
+// `param` 100 is `ZSTD_d_windowLogMax`, the largest window, as a power
+// of two, the context accepts.  The streaming decompressor refuses a
+// frame that asks for more, which bounds the memory an untrusted frame
+// can make it allocate.  The limit has no effect on the one-pass calls,
+// which allocate no window.  0 selects the default limit.  A parameter
+// is set before a frame starts.  Answers 0 or an error.
+//
+// ```novo ignore
+// // 100 is ZSTD_d_windowLogMax.
+// let rc = libzstd.zstd_dctx_set_parameter(dctx, 100, 27)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_DCtx_setParameter")
 fn zstd_dctx_set_parameter(dctx: Int, param: Int, value: Int) -> Int [ffi]
 
 // Reset a decompression context.
 //
-// `reset` takes the same three values as `ZSTD_CCtx_reset`.
+// `reset` takes the same three directives as `ZSTD_CCtx_reset`.  The
+// parameters can be reset only when no frame is being decompressed.
+// Answers 0 or an error.
+//
+// ```novo ignore
+// let rc = libzstd.zstd_dctx_reset(dctx, 1)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_DCtx_reset")
 fn zstd_dctx_reset(dctx: Int, reset: Int) -> Int [ffi]
 
-// Get the memory a decompression context is currently using, in bytes.
+// Get the memory a decompression context is using now, in bytes.
+//
+// The figure can grow or shrink over the context's life.
+//
+// ```novo ignore
+// let bytes_used = libzstd.zstd_sizeof_dctx(dctx)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_sizeof_DCtx")
 fn zstd_sizeof_dctx(dctx: Int) -> Int [ffi]
 
 // Load a dictionary into a decompression context, by copying it.
 //
-// `dict` and `dict_size` are the dictionary, and 0 for `dict` clears
-// the one already loaded.  It must be the dictionary the frames were
-// compressed with.
+// `dict` and `dict_size` are the dictionary, and the caller may free
+// the bytes once the call returns.  A null or empty dictionary clears
+// the one already loaded.  The dictionary is used for every frame
+// until it is cleared or replaced, and it must be the dictionary the
+// frames were compressed with.  Answers 0 or an error.
+//
+// ```novo ignore
+// let rc = libzstd.zstd_dctx_load_dictionary(dctx, dict, dict_size)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_DCtx_loadDictionary")
 fn zstd_dctx_load_dictionary(dctx: Int, dict: Int, dict_size: Int) -> Int [ffi]
 
 // Compress a stream, one piece of input at a time.
 //
 // `output` and `input` are the addresses of two 24-byte structures the
-// caller lays out: an address, a size and a position, in that order and
-// each eight bytes wide.  `end_op` is 0 to keep collecting, 1 to flush
-// what has been given, and 2 to flush and close the frame.  Answers 0
-// when everything asked for is done, and otherwise a hint at how many
-// bytes the next call would like — which is not an error.
+// caller lays out, `ZSTD_outBuffer` and `ZSTD_inBuffer`.  Each holds an
+// address, a size and a position, in that order and each eight bytes
+// wide.  The call advances both positions.  `end_op` is 0,
+// `ZSTD_e_continue`, to keep collecting input.  It is 1,
+// `ZSTD_e_flush`, to flush what has been given, and 2, `ZSTD_e_end`, to
+// flush and close the frame.  Answers the smallest number of bytes
+// still waiting in internal buffers, or an error.  With `end_op` 2, a
+// 0 means the frame is complete.  A non-zero answer is not an error.
+//
+// ```novo ignore
+// // 2 is ZSTD_e_end.
+// let remaining = libzstd.zstd_compress_stream2(cctx, out_buf, in_buf, 2)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_compressStream2")
 fn zstd_compress_stream2(cctx: Int, output: Int, input: Int, end_op: Int) -> Int [ffi]
 
 // Decompress a stream, one piece of input at a time.
 //
 // `output` and `input` are laid out as they are for
-// `ZSTD_compressStream2`.  Answers 0 when a frame has just been
-// completed, and otherwise a hint at how many bytes the next call
-// would like.  A caller stops at a 0 and not at an empty input: a
-// frame can end with bytes still to come.
+// `ZSTD_compressStream2`, and the call advances both positions.
+// Answers 0 when a frame is completely decoded and flushed, or an
+// error.  Any other answer means the frame is not finished, and it is
+// a suggested size for the next input.  A caller stops at a 0 and not
+// at an empty input, because a frame can end with bytes still to come.
+//
+// ```novo ignore
+// let hint = libzstd.zstd_decompress_stream(dctx, out_buf, in_buf)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_decompressStream")
 fn zstd_decompress_stream(dctx: Int, output: Int, input: Int) -> Int [ffi]
 
-// Get the input buffer size a streaming compressor prefers.
+// Get the recommended input buffer size for a streaming compressor.
 //
-// Reading in pieces of this size costs the fewest calls.
+// The size is a recommendation, and the streaming calls accept a
+// buffer of any size.  Across a foreign function interface, larger
+// buffers mean fewer calls.
+//
+// ```novo ignore
+// let in_size = libzstd.zstd_cstream_in_size()
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_CStreamInSize")
 fn zstd_cstream_in_size() -> Int [ffi]
 
-// Get the output buffer size a streaming compressor prefers.
+// Get the recommended output buffer size for a streaming compressor.
 //
-// A buffer of this size is large enough for one whole block, so a
-// flush never has to be split across calls.
+// A buffer of this size is guaranteed to hold at least one complete
+// compressed block when flushed.
+//
+// ```novo ignore
+// let out_size = libzstd.zstd_cstream_out_size()
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_CStreamOutSize")
 fn zstd_cstream_out_size() -> Int [ffi]
 
-// Get the input buffer size a streaming decompressor prefers.
+// Get the recommended input buffer size for a streaming decompressor.
+//
+// ```novo ignore
+// let in_size = libzstd.zstd_dstream_in_size()
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_DStreamInSize")
 fn zstd_dstream_in_size() -> Int [ffi]
 
-// Get the output buffer size a streaming decompressor prefers.
+// Get the recommended output buffer size for a streaming decompressor.
+//
+// A buffer of this size is guaranteed to hold at least one complete
+// block when flushed.
+//
+// ```novo ignore
+// let out_size = libzstd.zstd_dstream_out_size()
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_DStreamOutSize")
 fn zstd_dstream_out_size() -> Int [ffi]
 
 // Get the identifier recorded in a dictionary.
 //
-// Answers 0 when the bytes are not a zstd dictionary, or are a raw
-// content dictionary, which carries no identifier.
+// Answers 0 when the bytes are not a dictionary in the Zstandard
+// format.  Such bytes can still be loaded, as a raw content dictionary,
+// which carries no identifier.
+//
+// ```novo ignore
+// let id = libzstd.zstd_get_dict_id_from_dict(dict, dict_size)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_getDictID_fromDict")
 fn zstd_get_dict_id_from_dict(dict: Int, dict_size: Int) -> Int [ffi]
 
-// Get the dictionary identifier recorded in a frame.
+// Get the identifier of the dictionary a frame needs.
 //
-// Answers 0 when the frame used no dictionary, or used one whose
-// identifier was not written into the frame.
+// Answers 0 when the identifier could not be read.  The usual reason
+// is that the frame needs no dictionary.  The others are a frame
+// written without the identifier, which includes one compressed with a
+// raw content dictionary, a `src_size` too small for the frame header,
+// and bytes that are not a frame.
+//
+// ```novo ignore
+// let id = libzstd.zstd_get_dict_id_from_frame(frame, n)
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_getDictID_fromFrame")
 fn zstd_get_dict_id_from_frame(src: Int, src_size: Int) -> Int [ffi]
 
-// Ask whether a returned value is an error.
+// Ask whether a value a call returned is an error.
 //
-// Answers 1 when it is.  This is the only correct test: an error is a
-// code subtracted from zero, and a size and an error are the same C
-// type.
+// Answers 1 when it is and 0 otherwise.  A size and an error are the
+// same C type, so comparing the value with zero is not the same test.
+//
+// ```novo ignore
+// if libzstd.zstd_is_error(n) == 1
+//     println(ptr.read_str(libzstd.zstd_get_error_name(n)))
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_isError")
 fn zstd_is_error(code: Int) -> Int [ffi]
 
 // Get the text for an error.
 //
-// The answer is the address of a static string the library owns.  A
-// value that is not an error answers `"No error detected"`.
+// The answer is the address of a static string the library owns.  Read
+// it with `ptr.read_str` and do not free it.  A value that is not an
+// error answers `"No error detected"`.
+//
+// ```novo ignore
+// println(ptr.read_str(libzstd.zstd_get_error_name(n)))
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_getErrorName")
 fn zstd_get_error_name(code: Int) -> Int [ffi]
 
 // Get the smallest compression level the library accepts.
 //
-// The level is negative: the negative levels trade ratio for speed.
+// The level is negative.  A lower level compresses faster and less.
+// The answer is a C `int`, so a caller converts it with `as i32` before
+// comparing it with a negative number.
+//
+// ```novo ignore
+// let min_level = libzstd.zstd_min_clevel() as i32
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_minCLevel")
 fn zstd_min_clevel() -> Int [ffi]
 
 // Get the largest compression level the library accepts.
+//
+// It is 22 in libzstd 1.5.  Levels 20 and above need more memory.
+//
+// ```novo ignore
+// let max_level = libzstd.zstd_max_clevel()
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_maxCLevel")
 fn zstd_max_clevel() -> Int [ffi]
 
-// Get the level used when 0 is asked for.
+// Get the default compression level, the one level 0 selects.
+//
+// It is `ZSTD_CLEVEL_DEFAULT`, 3 unless libzstd was built otherwise.
+//
+// ```novo ignore
+// let level = libzstd.zstd_default_clevel()
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_defaultCLevel")
 fn zstd_default_clevel() -> Int [ffi]
 
 // Get the version of the library as a number.
 //
-// The value is the major version times a hundred thousand, plus the
-// minor times a hundred, plus the release: 1.5.5 answers 10505.
+// The value is the major version times ten thousand, plus the minor
+// version times a hundred, plus the release.  Version 1.5.5 answers
+// 10505.
+//
+// ```novo ignore
+// let at_least_1_5 = libzstd.zstd_version_number() >= 10500
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_versionNumber")
 fn zstd_version_number() -> Int [ffi]
 
 // Get the version of the library as text.
 //
 // The answer is the address of a static string such as `"1.5.5"`.
+// Read it with `ptr.read_str` and do not free it.
+//
+// ```novo ignore
+// println(ptr.read_str(libzstd.zstd_version_string()))
+// ```
 pub @ffi(library = "zstd", symbol = "ZSTD_versionString")
 fn zstd_version_string() -> Int [ffi]

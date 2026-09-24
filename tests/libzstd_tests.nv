@@ -1,8 +1,8 @@
-// API tests for the libzstd bindings.
+// The tests over the entry points of the libzstd bindings.
 //
 // Every test below calls into the C library, so the suite needs
 // libzstd installed and linked.  `novo pkg build` type-checks the
-// declarations without it; `novo test` runs them and does not.
+// declarations without it.  `novo test` runs them and does not.
 //
 // Every test compresses and decompresses in memory, so the suite reads
 // and writes nothing.
@@ -50,7 +50,7 @@ fn test_an_error_is_recognised_and_named() [io, ffi]
     let rc = libzstd.zstd_compress(dst, 1, src, MESSAGE_LEN, 3)
     test.assert(libzstd.zstd_is_error(rc) == 1)
     test.assert(str.len(ptr.read_str(libzstd.zstd_get_error_name(rc))) > 0)
-    // A size is not an error, and the reference has a name for that too.
+    // A size is not an error, and zstd has a name for that too.
     test.assert(libzstd.zstd_is_error(64) == 0)
     test.assert(ptr.read_str(libzstd.zstd_get_error_name(64)) == "No error detected")
     ptr.free(src)
@@ -67,7 +67,7 @@ fn test_a_message_round_trips_through_the_one_shot_calls() [io, ffi]
     let n = libzstd.zstd_compress(frame, bound, src, MESSAGE_LEN, 3)
     test.assert(libzstd.zstd_is_error(n) == 0)
     // Sixty bytes is shorter than the frame header plus a block, so the
-    // frame is not smaller than the message; it is a frame all the same.
+    // frame is not smaller than the message.  It is a frame all the same.
     test.assert(n > 0)
     test.assert(n <= bound)
     let back = ptr.alloc(128)
@@ -88,7 +88,7 @@ fn test_a_frame_reports_its_own_sizes() [io, ffi]
     test.assert(libzstd.zstd_get_frame_content_size(frame, n) == MESSAGE_LEN)
     test.assert(libzstd.zstd_find_frame_compressed_size(frame, n) == n)
     test.assert(libzstd.zstd_is_skippable_frame(frame, n) == 0)
-    // -2 is ZSTD_CONTENTSIZE_ERROR: these bytes are not a frame.
+    // -2 is ZSTD_CONTENTSIZE_ERROR, because these bytes are not a frame.
     test.assert(libzstd.zstd_get_frame_content_size(src, MESSAGE_LEN) == -2)
     ptr.free(frame)
     ptr.free(src)
@@ -101,11 +101,13 @@ fn test_a_compression_context_is_created_configured_and_reused() [io, ffi]
     let src = ptr.alloc(64)
     ptr.write_bytes_buf(src, bytes.from_str(MESSAGE))
     let frame = ptr.alloc(256)
-    // The level argument wins over the context's own parameters here.
+    // ZSTD_compressCCtx compresses at the level argument and resets any
+    // parameter set on the context.
     let a = libzstd.zstd_compress_cctx(cctx, frame, 256, src, MESSAGE_LEN, 1)
     test.assert(libzstd.zstd_is_error(a) == 0)
     test.assert(libzstd.zstd_cctx_reset(cctx, RESET_ALL) == 0)
-    // Setting a parameter answers the value that was actually set.
+    // libzstd 1.5 answers the value it set.  zstd.h promises only a
+    // value that is not an error.
     test.assert(libzstd.zstd_cctx_set_parameter(cctx, C_LEVEL, 9) == 9)
     test.assert(libzstd.zstd_cctx_set_parameter(cctx, C_CHECKSUM, 1) == 1)
     test.assert(libzstd.zstd_cctx_set_pledged_src_size(cctx, MESSAGE_LEN) == 0)
@@ -129,8 +131,8 @@ fn test_a_decompression_context_is_created_configured_and_reused() [io, ffi]
     let n = libzstd.zstd_compress(frame, 256, src, MESSAGE_LEN, 3)
     let dctx = libzstd.zstd_create_dctx()
     test.assert(dctx != 0)
-    // The decompression setter answers 0, where the compression one
-    // answers the value it set.
+    // The decompression setter answers 0 on success, where libzstd's
+    // compression setter answers the value it set.
     test.assert(libzstd.zstd_dctx_set_parameter(dctx, D_WINDOW_LOG_MAX, 27) == 0)
     let back = ptr.alloc(128)
     test.assert(libzstd.zstd_decompress_dctx(dctx, back, 128, frame, n) == MESSAGE_LEN)
@@ -191,7 +193,7 @@ fn test_the_streaming_interface_round_trips_a_message() [io, ffi]
 @test
 fn test_a_dictionary_loads_into_both_contexts() [io, ffi]
     test.case("ZSTD_CCtx_loadDictionary, ZSTD_DCtx_loadDictionary and the identifiers")
-    // A raw content dictionary: any bytes at all, with no header, so
+    // A raw content dictionary is any bytes at all, with no header, so
     // it carries no identifier of its own.
     let dict = ptr.alloc(64)
     ptr.write_bytes_buf(dict, bytes.from_str("the quick brown fox jumps over the lazy dog"))
@@ -203,7 +205,8 @@ fn test_a_dictionary_loads_into_both_contexts() [io, ffi]
     test.assert(libzstd.zstd_cctx_load_dictionary(cctx, dict, 43) == 0)
     let n = libzstd.zstd_compress2(cctx, frame, 256, src, MESSAGE_LEN)
     test.assert(libzstd.zstd_is_error(n) == 0)
-    // A raw content dictionary writes no identifier into the frame.
+    // A frame compressed with a raw content dictionary records no
+    // identifier.
     test.assert(libzstd.zstd_get_dict_id_from_frame(frame, n) == 0)
     let dctx = libzstd.zstd_create_dctx()
     test.assert(libzstd.zstd_dctx_load_dictionary(dctx, dict, 43) == 0)
