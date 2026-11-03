@@ -1,6 +1,6 @@
 [package]
 name        = "libzstd-sys"
-version     = "0.1.1"
+version     = "0.1.2"
 description = "Bindings over libzstd, the Zstandard compression library: the one-shot calls, the compression and decompression contexts, the streaming interface, the dictionary loaders, the error reporting and the version, one declaration per C entry point."
 license     = "Apache-2.0"
 
@@ -23,7 +23,7 @@ wraps       = "libzstd"
 tags        = ["ffi", "zstd", "zstandard", "compression", "codec", "bindings"]
 repository  = "https://github.com/novolang/libzstd-sys"
 maintainers = ["novo-lang"]
-novo        = ">= 0.8.9"
+novo        = ">= 0.23.0"
 
 [docs.pages]
 "README.md" = "The C entry points of libzstd, one novo-lang declaration each"
